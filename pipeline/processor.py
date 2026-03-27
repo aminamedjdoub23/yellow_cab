@@ -4,8 +4,10 @@ from pyspark.sql.window import Window
 import time
 import sys
 
+import os
 # log txt
-log_file = open("processor.txt", "w")
+log_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "processor.txt")
+log_file = open(log_path, "w")
 sys.stdout = log_file
 log_file.write("Processor started at {}".format(time.time()))
 
@@ -38,11 +40,13 @@ df_trips = df_trips.filter(
 # renommage
 pickup_zones = df_zones.withColumnRenamed("LocationID", "PU_LocID") \
                        .withColumnRenamed("Borough", "pickup_borough") \
-                       .withColumnRenamed("Zone", "pickup_zone")
+                       .withColumnRenamed("Zone", "pickup_zone") \
+                       .drop("service_zone")
 
 dropoff_zones = df_zones.withColumnRenamed("LocationID", "DO_LocID") \
                         .withColumnRenamed("Borough", "dropoff_borough") \
-                        .withColumnRenamed("Zone", "dropoff_zone")
+                        .withColumnRenamed("Zone", "dropoff_zone") \
+                        .drop("service_zone")
 
 # joins
 df_joined = df_trips.join(pickup_zones, df_trips.PULocationID == pickup_zones.PU_LocID, "inner")
@@ -60,10 +64,10 @@ payment_data = [
 df_payment_lookup = spark.createDataFrame(payment_data, ["payment_id", "payment_method"])
 df_joined = df_joined.join(df_payment_lookup, df_joined.payment_type == df_payment_lookup.payment_id, "inner")
 
-df_joined.persist()
-
 df_joined = df_joined.withColumn("pickup_hour", F.hour(F.col("tpep_pickup_datetime")))
 df_joined = df_joined.withColumn("pickup_date", F.to_date(F.col("tpep_pickup_datetime")))
+
+df_joined.persist()
 
 # agg_1 revenue
 df_revenue = df_joined.groupBy("pickup_zone", "pickup_hour") \
@@ -81,9 +85,9 @@ df_courses = df_joined.groupBy("pickup_date", "pickup_borough") \
 # hive
 spark.sql("CREATE DATABASE IF NOT EXISTS silver")
 
-df_joined.write.mode("overwrite").format("parquet").saveAsTable("silver.trips_cleaned")
-df_revenue.write.mode("overwrite").format("parquet").saveAsTable("silver.revenue_par_zone_heure")
-df_courses.write.mode("overwrite").format("parquet").saveAsTable("silver.courses_par_jour_borough")
+df_joined.write.mode("overwrite").format("parquet").partitionBy("pickup_date").saveAsTable("silver.trips_cleaned")
+df_revenue.write.mode("overwrite").format("parquet").partitionBy("pickup_zone").saveAsTable("silver.revenue_par_zone_heure")
+df_courses.write.mode("overwrite").format("parquet").partitionBy("pickup_date").saveAsTable("silver.courses_par_jour_borough")
 
 spark.stop()
 log_file.write("\nProcessor finished at {}".format(time.time()))

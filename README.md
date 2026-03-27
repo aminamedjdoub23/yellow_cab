@@ -1,261 +1,68 @@
-[![Gitter chat](https://badges.gitter.im/gitterHQ/gitter.png)](https://gitter.im/big-data-europe/Lobby)
+# Projet Big Data : Rentabilisation des Yellow Cabs de NYC
 
-# Docker multi-container environment with Hadoop, Spark and Hive
+Membres de l'équipe : Vincent BURGEVIN / Amina MEDJDOUB
+Cours : Big Data Framework
 
-This is it: a Docker multi-container environment with Hadoop (HDFS), Spark and Hive. But without the large memory requirements of a Cloudera sandbox. (On my Windows 10 laptop (with WSL2) it seems to consume a mere 3 GB.)
+## 1. Problématique business
+Avec la concurrence de services comme UBER et les VTC, les taxis jaunes de New York (Yellow Cabs) perdent une partie de leur clientèle. L'objectif de notre projet est d'analyser les trajets en fonction des zones, des horaires et des modes de paiements pour essayer de trouver des axes d'amélioration de la rentabilité.
 
-The only thing lacking, is that Hive server doesn't start automatically. To be added when I understand how to do that in docker-compose.
+## 2. Architecture du pipeline
 
+Nous avons utilisé Hadoop et PySpark sur Docker avec une architecture de type Medaillon (Bronze, Silver, Gold).
 
-## Quick Start
+### Partie 1 : Data Engineering (couches Raw et Silver)
 
-To deploy an the HDFS-Spark-Hive cluster, run:
-```
-  docker-compose up
-```
+- **Le script `feeder.py` (Couche Bronze / Raw)**
+  - Il ingère les fichiers sources : les trajets (en `.parquet`) et le fichier de référence des zones (`taxi_zone_lookup.csv`).
+  - Il partitionne les données par année, mois et jour (ex: `year=2024/month=01/day=01`) en se basant sur la date de départ (`tpep_pickup_datetime`).
+  - Il écrit les données dans le dossier `/raw` sur HDFS.
+  - Il génère un fichier de log `feeder.txt`.
 
-`docker-compose` creates a docker network that can be found by running `docker network list`, e.g. `docker-hadoop-spark-hive_default`.
+- **Le script `processor.py` (Couche Silver)**
+  - Il lit les données stockées dans `/raw`.
+  - Il nettoie les données avec 5 grandes règles qualité : 
+    - Le prix est supérieur à zéro (`fare_amount > 0`).
+    - La distance est supérieure à zéro (`trip_distance > 0`).
+    - Les dates de départ et d'arrivée sont logiques.
+    - Le nombre de passagers est compris entre 1 et 6 passagers pour enlever les valeurs aberrantes.
+    - Les *LocationID* existent bien dans le fichier de référence.
+  - Il fait les jointures avec le fichier des zones (une fois pour le point de départ, une fois pour l'arrivée) et le fichier des types de paiement.
+  - Il calcule les agrégations : revenu moyen par zone et par heure, et nombre de courses par jour et par borough.
+  - Il utilise la fonction `RANK()` (window function) pour classer les revenus, et la méthode `.persist()` pour optimiser la mémoire de Spark.
+  - Il écrit les tables nettoyées dans la base de données Hive (`/user/hive/warehouse/silver.db/`) en les partitionnant par jour ou par zone pour optimiser les requêtes futures.
+  - Il crée un log `processor.txt`.
 
-Run `docker network inspect` on the network (e.g. `docker-hadoop-spark-hive_default`) to find the IP the hadoop interfaces are published on. Access these interfaces with the following URLs:
+### Partie 2 : Datamarts et API (Couche Gold) - Travail du binôme
+- **Le script `datamart.py`**
+  - Il lit les données de la couche Silver via Spark SQL.
+  - Il crée 3 tables d'analyse (Datamarts) orientées métier : `dm_zone_performance`, `dm_hourly_demand`, et `dm_payment_analysis`.
+  - Il écrit ces datamarts dans une base relationnelle.
+  - Il crée le log `datamart.txt`.
+- **L'API FastAPI**
+  - Elle permet d'accéder aux données finales avec une authentification JWT sécurisée.
 
-* Namenode: http://<dockerhadoop_IP_address>:9870/dfshealth.html#tab-overview
-* History server: http://<dockerhadoop_IP_address>:8188/applicationhistory
-* Datanode: http://<dockerhadoop_IP_address>:9864/
-* Nodemanager: http://<dockerhadoop_IP_address>:8042/node
-* Resource manager: http://<dockerhadoop_IP_address>:8088/
-* Spark master: http://<dockerhadoop_IP_address>:8080/
-* Spark worker: http://<dockerhadoop_IP_address>:8081/
-* Hive: http://<dockerhadoop_IP_address>:10000
+## 3. Execution
 
-## Important note regarding Docker Desktop
-Since Docker Desktop turned “Expose daemon on tcp://localhost:2375 without TLS” off by default there have been all kinds of connection problems running the complete docker-compose. Turning this option on again (Settings > General > Expose daemon on tcp://localhost:2375 without TLS) makes it all work. I’m still looking for a more secure solution to this.
-
-
-## Quick Start HDFS
-
-Copy breweries.csv to the namenode.
-```
-  docker cp breweries.csv namenode:breweries.csv
-```
-
-Go to the bash shell on the namenode with that same Container ID of the namenode.
-```
-  docker exec -it namenode bash
-```
-
-
-Create a HDFS directory /data//openbeer/breweries.
-
-```
-  hdfs dfs -mkdir -p /data/openbeer/breweries
+1. Démarrer Docker :
+```bash
+docker-compose up -d
 ```
 
-Copy breweries.csv to HDFS:
-```
-  hdfs dfs -put breweries.csv /data/openbeer/breweries/breweries.csv
-```
-
-
-## Quick Start Spark (PySpark)
-
-Go to http://<dockerhadoop_IP_address>:8080 or http://localhost:8080/ on your Docker host (laptop) to see the status of the Spark master.
-
-Go to the command line of the Spark master and start PySpark.
-```
-  docker exec -it spark-master bash
-
-  /spark/bin/pyspark --master spark://spark-master:7077
+2. Convertir le fichier de base en `snappy` (Correction de compatibilité Spark 3.0) :
+```bash
+python pipeline/convertisseur_zstd.py
 ```
 
-Load breweries.csv from HDFS.
-```
-  brewfile = spark.read.csv("hdfs://namenode:9000/data/openbeer/breweries/breweries.csv")
-  
-  brewfile.show()
-+----+--------------------+-------------+-----+---+
-| _c0|                 _c1|          _c2|  _c3|_c4|
-+----+--------------------+-------------+-----+---+
-|null|                name|         city|state| id|
-|   0|  NorthGate Brewing |  Minneapolis|   MN|  0|
-|   1|Against the Grain...|   Louisville|   KY|  1|
-|   2|Jack's Abby Craft...|   Framingham|   MA|  2|
-|   3|Mike Hess Brewing...|    San Diego|   CA|  3|
-|   4|Fort Point Beer C...|San Francisco|   CA|  4|
-|   5|COAST Brewing Com...|   Charleston|   SC|  5|
-|   6|Great Divide Brew...|       Denver|   CO|  6|
-|   7|    Tapistry Brewing|     Bridgman|   MI|  7|
-|   8|    Big Lake Brewing|      Holland|   MI|  8|
-|   9|The Mitten Brewin...| Grand Rapids|   MI|  9|
-|  10|      Brewery Vivant| Grand Rapids|   MI| 10|
-|  11|    Petoskey Brewing|     Petoskey|   MI| 11|
-|  12|  Blackrocks Brewery|    Marquette|   MI| 12|
-|  13|Perrin Brewing Co...|Comstock Park|   MI| 13|
-|  14|Witch's Hat Brewi...|   South Lyon|   MI| 14|
-|  15|Founders Brewing ...| Grand Rapids|   MI| 15|
-|  16|   Flat 12 Bierwerks| Indianapolis|   IN| 16|
-|  17|Tin Man Brewing C...|   Evansville|   IN| 17|
-|  18|Black Acre Brewin...| Indianapolis|   IN| 18|
-+----+--------------------+-------------+-----+---+
-only showing top 20 rows
-
+3. Lancer l'ingestion vers le dossier Raw (HDFS) :
+```bash
+docker exec -it spark-master /spark/bin/spark-submit /opt/pipeline/feeder.py
 ```
 
-
-
-## Quick Start Spark (Scala)
-
-Go to http://<dockerhadoop_IP_address>:8080 or http://localhost:8080/ on your Docker host (laptop) to see the status of the Spark master.
-
-Go to the command line of the Spark master and start spark-shell.
-```
-  docker exec -it spark-master bash
-  
-  spark/bin/spark-shell --master spark://spark-master:7077
+4. Lancer le nettoyage vers la base Silver (Hive) :
+```bash
+docker exec -it spark-master /spark/bin/spark-submit /opt/pipeline/processor.py
 ```
 
-Load breweries.csv from HDFS.
-```
-  val df = spark.read.csv("hdfs://namenode:9000/data/openbeer/breweries/breweries.csv")
-  
-  df.show()
-+----+--------------------+-------------+-----+---+
-| _c0|                 _c1|          _c2|  _c3|_c4|
-+----+--------------------+-------------+-----+---+
-|null|                name|         city|state| id|
-|   0|  NorthGate Brewing |  Minneapolis|   MN|  0|
-|   1|Against the Grain...|   Louisville|   KY|  1|
-|   2|Jack's Abby Craft...|   Framingham|   MA|  2|
-|   3|Mike Hess Brewing...|    San Diego|   CA|  3|
-|   4|Fort Point Beer C...|San Francisco|   CA|  4|
-|   5|COAST Brewing Com...|   Charleston|   SC|  5|
-|   6|Great Divide Brew...|       Denver|   CO|  6|
-|   7|    Tapistry Brewing|     Bridgman|   MI|  7|
-|   8|    Big Lake Brewing|      Holland|   MI|  8|
-|   9|The Mitten Brewin...| Grand Rapids|   MI|  9|
-|  10|      Brewery Vivant| Grand Rapids|   MI| 10|
-|  11|    Petoskey Brewing|     Petoskey|   MI| 11|
-|  12|  Blackrocks Brewery|    Marquette|   MI| 12|
-|  13|Perrin Brewing Co...|Comstock Park|   MI| 13|
-|  14|Witch's Hat Brewi...|   South Lyon|   MI| 14|
-|  15|Founders Brewing ...| Grand Rapids|   MI| 15|
-|  16|   Flat 12 Bierwerks| Indianapolis|   IN| 16|
-|  17|Tin Man Brewing C...|   Evansville|   IN| 17|
-|  18|Black Acre Brewin...| Indianapolis|   IN| 18|
-+----+--------------------+-------------+-----+---+
-only showing top 20 rows
-
-```
-
-How cool is that? Your own Spark cluster to play with.
-
-
-## Quick Start Hive
-
-Go to the command line of the Hive server and start hiveserver2
-
-```
-  docker exec -it hive-server bash
-
-  hiveserver2
-```
-
-Maybe a little check that something is listening on port 10000 now
-```
-  netstat -anp | grep 10000
-tcp        0      0 0.0.0.0:10000           0.0.0.0:*               LISTEN      446/java
-
-```
-
-Okay. Beeline is the command line interface with Hive. Let's connect to hiveserver2 now.
-
-```
-  beeline -u jdbc:hive2://localhost:10000 -n root
-  
-  !connect jdbc:hive2://127.0.0.1:10000 scott tiger
-```
-
-Didn't expect to encounter scott/tiger again after my Oracle days. But there you have it. Definitely not a good idea to keep that user on production.
-
-Not a lot of databases here yet.
-```
-  show databases;
-  
-+----------------+
-| database_name  |
-+----------------+
-| default        |
-+----------------+
-1 row selected (0.335 seconds)
-```
-
-Let's change that.
-
-```
-  create database openbeer;
-  use openbeer;
-```
-
-And let's create a table.
-
-```
-CREATE EXTERNAL TABLE IF NOT EXISTS breweries(
-    NUM INT,
-    NAME CHAR(100),
-    CITY CHAR(100),
-    STATE CHAR(100),
-    ID INT )
-ROW FORMAT DELIMITED
-FIELDS TERMINATED BY ','
-STORED AS TEXTFILE
-location '/data/openbeer/breweries';
-```
-
-And have a little select statement going.
-
-```
-  select name from breweries limit 10;
-+----------------------------------------------------+
-|                        name                        |
-+----------------------------------------------------+
-| name                                                                                                 |
-| NorthGate Brewing                                                                                    |
-| Against the Grain Brewery                                                                            |
-| Jack's Abby Craft Lagers                                                                             |
-| Mike Hess Brewing Company                                                                            |
-| Fort Point Beer Company                                                                              |
-| COAST Brewing Company                                                                                |
-| Great Divide Brewing Company                                                                         |
-| Tapistry Brewing                                                                                     |
-| Big Lake Brewing                                                                                     |
-+----------------------------------------------------+
-10 rows selected (0.113 seconds)
-```
-
-There you go: your private Hive server to play with.
-
-
-## Configure Environment Variables
-
-The configuration parameters can be specified in the hadoop.env file or as environmental variables for specific services (e.g. namenode, datanode etc.):
-```
-  CORE_CONF_fs_defaultFS=hdfs://namenode:8020
-```
-
-CORE_CONF corresponds to core-site.xml. fs_defaultFS=hdfs://namenode:8020 will be transformed into:
-```
-  <property><name>fs.defaultFS</name><value>hdfs://namenode:8020</value></property>
-```
-To define dash inside a configuration parameter, use triple underscore, such as YARN_CONF_yarn_log___aggregation___enable=true (yarn-site.xml):
-```
-  <property><name>yarn.log-aggregation-enable</name><value>true</value></property>
-```
-
-The available configurations are:
-* /etc/hadoop/core-site.xml CORE_CONF
-* /etc/hadoop/hdfs-site.xml HDFS_CONF
-* /etc/hadoop/yarn-site.xml YARN_CONF
-* /etc/hadoop/httpfs-site.xml HTTPFS_CONF
-* /etc/hadoop/kms-site.xml KMS_CONF
-* /etc/hadoop/mapred-site.xml  MAPRED_CONF
-
-If you need to extend some other configuration file, refer to base/entrypoint.sh bash script.
+## 4. Choix techniques rencontrés lors du projet
+- **Gestion de la mémoire (RAM)** : L'ingestion des énormes fichiers Parquet faisait crasher notre noeud Spark (`OutOfMemoryError: Java heap space`). Plutôt que de faire une boucle Python (ce qui casserait la logique distribuée), nous avons optimisé la gestion des partitions de Spark. Nous avons ajouté la commande `.repartition(4)` juste avant l'écriture dans `feeder.py`. Cela force Spark à regrouper les données en 4 blocs de traitement en mémoire, ce qui allège la RAM lors du shuffle massif et règle les crashs d'écriture sur HDFS !
+- **Le plantage au niveau de Hive (`service_zone`)** : Lors de notre double jointure sur le fichier des zones, la colonne `service_zone` s'est retrouvée copiée en double dans notre tableau final. Cela empêchait Hive de sauvegarder les données au format Parquet. Nous avons simplement ajouté une commande `.drop("service_zone")` dans Spark pour retirer cette colonne avant la jointure, car elle n'était de toute façon pas demandée pour nos KPI de rentabilité.

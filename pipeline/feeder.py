@@ -3,7 +3,9 @@ from pyspark.sql import SparkSession, functions as F
 import time
 import sys
 
-log_file = open("feeder.txt", "w")
+import os
+log_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "feeder.txt")
+log_file = open(log_path, "w")
 sys.stdout = log_file
 log_file.write("Feeder started at {}".format(time.time()))
 
@@ -35,11 +37,10 @@ df_trips_partitioned = (
             .withColumn("day", F.dayofmonth(F.col("tpep_pickup_datetime")))
 )
 
-df_trips_partitioned.persist()
-
+df_trips_partitioned.cache()
 df_trips_partitioned.show(10)
-
 r =  df_trips_partitioned.count()
+
 print("Nombre de lignes : {}".format(r))
 
 output_base_trips = "hdfs://namenode:9000/raw/trips"
