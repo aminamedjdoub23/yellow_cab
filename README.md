@@ -63,6 +63,28 @@ docker exec -it spark-master /spark/bin/spark-submit /opt/pipeline/feeder.py
 docker exec -it spark-master /spark/bin/spark-submit /opt/pipeline/processor.py
 ```
 
+5. Lancer la création des Datamarts (Couche Gold) dans SQLite :
+```bash
+docker exec -it spark-master /spark/bin/spark-submit /opt/pipeline/datamart.py
+```
+
+6. Lancer l'API FastAPI et l'interface Streamlit (En local sur votre machine) :
+
+Ouvrez un premier terminal pour l'API :
+```bash
+cd api
+pip install -r requirements.txt
+uvicorn app:app --reload
+```
+L'API sera accessible sur [http://localhost:8000/docs](http://localhost:8000/docs).
+
+Ouvrez un deuxième terminal pour la visualisation Streamlit :
+```bash
+cd api
+streamlit run app_streamlit.py
+```
+Le dashboard s'ouvrira automatiquement sur votre navigateur (identifiants: admin / admin).
+
 ## 4. Choix techniques rencontrés lors du projet
 - **Gestion de la mémoire (RAM)** : L'ingestion des énormes fichiers Parquet faisait crasher notre noeud Spark (`OutOfMemoryError: Java heap space`). Plutôt que de faire une boucle Python (ce qui casserait la logique distribuée), nous avons optimisé la gestion des partitions de Spark. Nous avons ajouté la commande `.repartition(4)` juste avant l'écriture dans `feeder.py`. Cela force Spark à regrouper les données en 4 blocs de traitement en mémoire, ce qui allège la RAM lors du shuffle massif et règle les crashs d'écriture sur HDFS !
 - **Le plantage au niveau de Hive (`service_zone`)** : Lors de notre double jointure sur le fichier des zones, la colonne `service_zone` s'est retrouvée copiée en double dans notre tableau final. Cela empêchait Hive de sauvegarder les données au format Parquet. Nous avons simplement ajouté une commande `.drop("service_zone")` dans Spark pour retirer cette colonne avant la jointure, car elle n'était de toute façon pas demandée pour nos KPI de rentabilité.
