@@ -143,3 +143,8 @@ Requete API : payment_analysis (limit=10, skip=0)
 Requete API : zone_performance (limit=10, skip=0)
 
 --- API Démarrée à 1774707571.5469592 ---
+
+--- API Démarrée à 1774707589.7582695 ---
+Requete API : hourly_demand (limit=24, skip=0)
+Requete API : payment_analysis (limit=10, skip=0)
+Requete API : zone_performance (limit=10, skip=0)

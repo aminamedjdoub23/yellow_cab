@@ -4,87 +4,88 @@ Membres de l'équipe : Vincent BURGEVIN / Amina MEDJDOUB
 Cours : Big Data Framework
 
 ## 1. Problématique business
-Avec la concurrence de services comme UBER et les VTC, les taxis jaunes de New York (Yellow Cabs) perdent une partie de leur clientèle. L'objectif de notre projet est d'analyser les trajets en fonction des zones, des horaires et des modes de paiements pour essayer de trouver des axes d'amélioration de la rentabilité.
+
+Avec la concurrence des VTC comme Uber, les taxis jaunes de New York (Yellow Cabs) perdent une partie de leur clientèle. L'objectif de ce projet est d'analyser les trajets en fonction des zones, des horaires et des modes de paiement pour identifier des axes d'amélioration de la rentabilité.
 
 ## 2. Architecture du pipeline
 
-Nous avons utilisé Hadoop et PySpark sur Docker avec une architecture de type Medaillon (Bronze, Silver, Gold).
+Nous avons utilisé Hadoop et PySpark sur Docker avec une architecture Médaillon (Bronze → Silver → Gold).
 
-### Partie 1 : Data Engineering (couches Raw et Silver)
+### Couche Raw (Bronze) — `feeder.py`
+- Ingère les fichiers sources : trajets (`.parquet`) et référentiel des zones (`taxi_zone_lookup.csv`)
+- Partitionne les données par année, mois et jour en se basant sur `tpep_pickup_datetime`
+- Écrit les données dans `/raw` sur HDFS
+- Génère le log `feeder.txt`
 
-- **Le script `feeder.py` (Couche Bronze / Raw)**
-  - Il ingère les fichiers sources : les trajets (en `.parquet`) et le fichier de référence des zones (`taxi_zone_lookup.csv`).
-  - Il partitionne les données par année, mois et jour (ex: `year=2024/month=01/day=01`) en se basant sur la date de départ (`tpep_pickup_datetime`).
-  - Il écrit les données dans le dossier `/raw` sur HDFS.
-  - Il génère un fichier de log `feeder.txt`.
+### Couche Silver — `processor.py`
+- Lit les données depuis `/raw`
+- Applique 5 règles de qualité : prix > 0, distance > 0, dates cohérentes, passagers entre 1 et 6, LocationID valide
+- Effectue les jointures avec le référentiel des zones (départ et arrivée) et les types de paiement
+- Utilise la window function `RANK()` et `.persist()` pour optimiser Spark
+- Écrit les tables nettoyées dans Hive (`/user/hive/warehouse/silver.db/`)
+- Génère le log `processor.txt`
 
-- **Le script `processor.py` (Couche Silver)**
-  - Il lit les données stockées dans `/raw`.
-  - Il nettoie les données avec 5 grandes règles qualité : 
-    - Le prix est supérieur à zéro (`fare_amount > 0`).
-    - La distance est supérieure à zéro (`trip_distance > 0`).
-    - Les dates de départ et d'arrivée sont logiques.
-    - Le nombre de passagers est compris entre 1 et 6 passagers pour enlever les valeurs aberrantes.
-    - Les *LocationID* existent bien dans le fichier de référence.
-  - Il fait les jointures avec le fichier des zones (une fois pour le point de départ, une fois pour l'arrivée) et le fichier des types de paiement.
-  - Il calcule les agrégations : revenu moyen par zone et par heure, et nombre de courses par jour et par borough.
-  - Il utilise la fonction `RANK()` (window function) pour classer les revenus, et la méthode `.persist()` pour optimiser la mémoire de Spark.
-  - Il écrit les tables nettoyées dans la base de données Hive (`/user/hive/warehouse/silver.db/`) en les partitionnant par jour ou par zone pour optimiser les requêtes futures.
-  - Il crée un log `processor.txt`.
+### Couche Gold — `datamart.py`
+- Lit les données Silver via Spark SQL
+- Crée 3 datamarts métier : `dm_zone_performance`, `dm_hourly_demand`, `dm_payment_analysis`
+- Exporte ces datamarts dans une base SQLite (`pipeline/datamarts.db`)
+- Génère le log `datamart.txt`
 
-### Partie 2 : Datamarts et API (Couche Gold) - Travail du binôme
-- **Le script `datamart.py`**
-  - Il lit les données de la couche Silver via Spark SQL.
-  - Il crée 3 tables d'analyse (Datamarts) orientées métier : `dm_zone_performance`, `dm_hourly_demand`, et `dm_payment_analysis`.
-  - Il écrit ces datamarts dans une base relationnelle.
-  - Il crée le log `datamart.txt`.
-- **L'API FastAPI**
-  - Elle permet d'accéder aux données finales avec une authentification JWT sécurisée.
+### API et Visualisation
+- **`api/app.py`** : API FastAPI sécurisée avec JWT, 3 endpoints paginés, log dans `api/app_logs.txt`
+- **`api/app_streamlit.py`** : Dashboard de visualisation avec 4 graphiques interactifs connectés à l'API
 
-## 3. Execution
+## 3. Exécution
 
-1. Démarrer Docker :
+**1. Démarrer Docker :**
 ```bash
 docker-compose up -d
 ```
 
-2. Convertir le fichier de base en `snappy` (Correction de compatibilité Spark 3.0) :
+**2. Convertir les fichiers source en format Snappy (compatibilité Spark 3.0) :**
 ```bash
 python pipeline/convertisseur_zstd.py
 ```
 
-3. Lancer l'ingestion vers le dossier Raw (HDFS) :
+**3. Ingestion vers HDFS (couche Raw) :**
 ```bash
 docker exec -it spark-master /spark/bin/spark-submit /opt/pipeline/feeder.py
 ```
 
-4. Lancer le nettoyage vers la base Silver (Hive) :
+**4. Nettoyage vers Hive (couche Silver) :**
 ```bash
 docker exec -it spark-master /spark/bin/spark-submit /opt/pipeline/processor.py
 ```
 
-5. Lancer la création des Datamarts (Couche Gold) dans SQLite :
+**5. Création des datamarts SQLite (couche Gold) :**
 ```bash
 docker exec -it spark-master /spark/bin/spark-submit /opt/pipeline/datamart.py
 ```
 
-6. Lancer l'API FastAPI et l'interface Streamlit (En local sur votre machine) :
-
-Ouvrez un premier terminal pour l'API :
+**6. Lancer l'API (terminal 1) :**
 ```bash
 cd api
 pip install -r requirements.txt
 uvicorn app:app --reload
 ```
-L'API sera accessible sur [http://localhost:8000/docs](http://localhost:8000/docs).
+API disponible sur [http://localhost:8000/docs](http://localhost:8000/docs)
+Identifiants : `admin` / `admin`
 
-Ouvrez un deuxième terminal pour la visualisation Streamlit :
+Endpoints disponibles :
+- `POST /auth/token` — obtenir un token JWT
+- `GET /datamarts/zone_performance` — top zones par revenus
+- `GET /datamarts/hourly_demand` — demande par heure
+- `GET /datamarts/payment_analysis` — répartition des paiements
+
+**7. Lancer le dashboard Streamlit (terminal 2) :**
 ```bash
 cd api
 streamlit run app_streamlit.py
 ```
-Le dashboard s'ouvrira automatiquement sur votre navigateur (identifiants: admin / admin).
+Le dashboard s'ouvre automatiquement dans le navigateur.
 
-## 4. Choix techniques rencontrés lors du projet
-- **Gestion de la mémoire (RAM)** : L'ingestion des énormes fichiers Parquet faisait crasher notre noeud Spark (`OutOfMemoryError: Java heap space`). Plutôt que de faire une boucle Python (ce qui casserait la logique distribuée), nous avons optimisé la gestion des partitions de Spark. Nous avons ajouté la commande `.repartition(4)` juste avant l'écriture dans `feeder.py`. Cela force Spark à regrouper les données en 4 blocs de traitement en mémoire, ce qui allège la RAM lors du shuffle massif et règle les crashs d'écriture sur HDFS !
-- **Le plantage au niveau de Hive (`service_zone`)** : Lors de notre double jointure sur le fichier des zones, la colonne `service_zone` s'est retrouvée copiée en double dans notre tableau final. Cela empêchait Hive de sauvegarder les données au format Parquet. Nous avons simplement ajouté une commande `.drop("service_zone")` dans Spark pour retirer cette colonne avant la jointure, car elle n'était de toute façon pas demandée pour nos KPI de rentabilité.
+## 4. Choix techniques
+
+- **Mémoire Spark** : Le traitement de tous les fichiers Parquet causait des `OutOfMemoryError`. Nous avons ajouté `.repartition(4)` dans `feeder.py` pour limiter la consommation mémoire lors des shuffles.
+- **Doublon de colonne Hive** : La double jointure sur le référentiel des zones dupliquait la colonne `service_zone`, ce qui bloquait l'écriture en format Parquet dans Hive. Nous avons ajouté `.drop("service_zone")` pour contourner ce problème.
+- **SQLite pour les datamarts** : Plutôt qu'une base distante, nous avons choisi SQLite pour sa simplicité de déploiement. Le fichier `datamarts.db` est directement lu par l'API FastAPI sans configuration supplémentaire.
