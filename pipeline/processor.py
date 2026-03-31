@@ -1,7 +1,6 @@
-from datetime import date
+from datetime import date, datetime
 from pyspark.sql import SparkSession, functions as F
 from pyspark.sql.window import Window
-import time
 import sys
 
 import os
@@ -9,7 +8,9 @@ import os
 log_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "processor.txt")
 log_file = open(log_path, "w")
 sys.stdout = log_file
-log_file.write("Processor started at {}".format(time.time()))
+sys.stderr = log_file
+now = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
+log_file.write("Processor started at {}\n".format(now))
 
 # init avec hive support
 spark = (
@@ -90,5 +91,6 @@ df_revenue.write.mode("overwrite").format("parquet").partitionBy("pickup_zone").
 df_courses.write.mode("overwrite").format("parquet").partitionBy("pickup_date").saveAsTable("silver.courses_par_jour_borough")
 
 spark.stop()
-log_file.write("\nProcessor finished at {}".format(time.time()))
+now = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
+log_file.write("\nProcessor finished at {}\n".format(now))
 log_file.close()

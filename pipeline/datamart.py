@@ -1,14 +1,17 @@
 from pyspark.sql import SparkSession
+from datetime import datetime
 import pyspark.sql.functions as PyFun
 import sqlite3
 import os
-import time
 import sys
 
 # config logs
-log_file = open("datamart.txt", "w")
+log_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "datamart.txt")
+log_file = open(log_path, "w")
 sys.stdout = log_file
-log_file.write("Datamart started at {}".format(time.time()))
+sys.stderr = log_file
+now = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
+log_file.write("Datamart started at {}\n".format(now))
 
 # init avec hive support
 spark = (
@@ -26,7 +29,7 @@ dm_zone_performance = df_trips.groupBy("pickup_borough", "pickup_zone").agg(
     PyFun.count("*").alias("total_trips"),
     PyFun.avg("fare_amount").alias("avg_fare"),
     PyFun.sum("fare_amount").alias("total_revenue")
-).orderBy(PyFun.desc("total_trips"))
+).orderBy(PyFun.desc("total_revenue"))
 
 # 2. dm_hourly_demand
 dm_hourly_demand = df_trips.groupBy("pickup_hour").agg(
@@ -66,5 +69,6 @@ conn.commit()
 conn.close()
 
 spark.stop()
-log_file.write("\nDatamart finished at {}".format(time.time()))
+now = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
+log_file.write("\nDatamart finished at {}\n".format(now))
 log_file.close()

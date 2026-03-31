@@ -1,19 +1,27 @@
 from fastapi import FastAPI, Depends, HTTPException
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
+from dotenv import load_dotenv
 import sqlite3
 import os
 import jwt
 import time
 from datetime import datetime, timedelta
 
+# charge les variables depuis le fichier .env
+load_dotenv()
+
 app = FastAPI()
 
 # config logs pour le troubleshoot de l'API (mode "a" = append)
 log_file = open("app_logs.txt", "a", buffering=1)
-log_file.write(f"\n--- API Démarrée à {time.time()} ---\n")
+now = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
+log_file.write(f"\n--- API demarree a {now} ---\n")
 
-SECRET_KEY = "key_projet_yellow_cabs"
+# valeurs chargees depuis le fichier .env
+SECRET_KEY = os.getenv("SECRET_KEY")
 ALGORITHM = "HS256"
+API_USER = os.getenv("API_USER")
+API_PASSWORD = os.getenv("API_PASSWORD")
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="auth/token")
 
@@ -37,8 +45,8 @@ def create_access_token(data: dict):
 def login(form_data: OAuth2PasswordRequestForm = Depends()):
     log_file.write(f"Tentative de connexion : {form_data.username}\n")
     
-    # juste admin admin pour le test
-    if form_data.username == "admin" and form_data.password == "admin":
+    # verification via les variables d'env
+    if form_data.username == API_USER and form_data.password == API_PASSWORD:
         access_token = create_access_token(data={"sub": form_data.username})
         log_file.write("-> Connexion reussie.\n")
         return {"access_token": access_token, "token_type": "bearer"}
