@@ -1,8 +1,7 @@
-data/
-source/
+#data/
+#source/
 *processor.txt
 *feeder.txt
 *datamart.txt
 api/app_logs.txt
-# fichier de secrets - ne jamais commiter
-api/.env
+#api/.env
