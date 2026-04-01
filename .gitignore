@@ -4,4 +4,4 @@
 *feeder.txt
 *datamart.txt
 api/app_logs.txt
-#api/.env
+#api/.env normalement non push mais nécessaire pour la correction du projet !
